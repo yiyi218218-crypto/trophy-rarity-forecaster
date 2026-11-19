@@ -41,6 +41,8 @@ SATURATION_SPAN = 2.6
 RATE_TOP_PCT = 99.6
 SLOPE_FLOOR, SLOPE_CEIL = -0.18, 2.30
 DECLINE_ATTENUATION = 0.34   # a falling rate is not extrapolated at full speed
+STEP_LIMIT = 1.50            # no single trophy moves further than this in logit, whatever the fit says
+DENOM_JUMP = 1.35            # one refresh multiplying the tracked base this much is a regime break
 
 SHRINK_MIN, SHRINK_MAX = 0.18, 0.88
 PRIOR_VAR_FLOOR = 0.010
@@ -226,12 +228,27 @@ def forecast_case(case):
     ref_hours = max(hours) if hours else 1.0
     horizon_days = max(0.02, float(case.get("horizon_minutes") or 60.0) / 1440.0)
 
+    # A refresh that multiplies the tracked base re-bases every rate: reads from before it
+    # describe a different denominator and would bias the slope, so the fit starts after the
+    # last such break, provided enough reads remain to fit anything at all.
+    cut = 0
+    if len(reads) >= 8:
+        for j in range(1, len(reads)):
+            before = reads[j - 1].get("players_tracked")
+            after = reads[j].get("players_tracked")
+            if (isinstance(before, (int, float)) and isinstance(after, (int, float))
+                    and before > 0 and after / before >= DENOM_JUMP
+                    and j >= len(reads) // 4):
+                cut = j
+        if len(reads) - cut < 12:
+            cut = 0
+
     # Per-trophy observations, in read order.
     observed = []
     for idx in range(n):
         points = []
-        for j, read in enumerate(reads):
-            rates = read.get("rates") or []
+        for j in range(cut, len(reads)):
+            rates = reads[j].get("rates") or []
             if idx < len(rates):
                 pct = clamp_rate(rates[idx])
                 if pct is not None:
@@ -310,6 +327,7 @@ def forecast_case(case):
         if level > SATURATION_LOGIT:
             compress = 1.0 - (level - SATURATION_LOGIT) / SATURATION_SPAN
             step *= max(0.15, compress)
+        step = min(STEP_LIMIT, max(-STEP_LIMIT, step))
         centre = level + step
         centre = min(to_logit(RATE_TOP_PCT), max(to_logit(0.02), centre))
 
