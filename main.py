@@ -187,6 +187,9 @@ def robust_trend(points, ref_hours):
                 if ws[k] < 1e-6:
                     ws[k] = 1e-6
     intercept, slope, _, _, _, se_slope = fit
+    # A handful of plateaus pins a line with almost no residual, which would read as
+    # certainty; floor the error by how little the page actually moved.
+    se_slope = max(se_slope, 0.34 / math.sqrt(max(2, len(points))))
     return {
         "intercept": intercept,
         "slope": slope,
@@ -310,9 +313,13 @@ def forecast_case(case):
             rows.append({"id": trophies[idx].get("id", idx + 1), "q": list(HIGH_RATE_FAN)})
             continue
         if fit is None:
+            # No movement to fit at all (an ultra-rare trophy the page never ticked over):
+            # borrow the growth its band shows rather than freezing it at the last rate.
             level = to_logit(pct)
-            slope_used = 0.0
-            se_delta = 0.30
+            slope_used = min(SLOPE_CEIL, max(SLOPE_FLOOR, priors[idx]))
+            if slope_used < 0.0:
+                slope_used *= DECLINE_ATTENUATION
+            se_delta = 0.34
         else:
             var_b = fit["se_slope"] ** 2 + 1e-6
             weight = min(SHRINK_MAX, max(SHRINK_MIN, prior_var / (prior_var + var_b)))
